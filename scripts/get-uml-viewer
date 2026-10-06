@@ -1,10 +1,10 @@
 #!/bin/zsh
 # Fetch uml-viewer into this project and start it.
-# Install: curl -fsSL https://raw.githubusercontent.com/unclebob/uml-viewer/master/scripts/get-uml-viewer -o get-uml-viewer
+# Install: curl -fsSL https://raw.githubusercontent.com/timotheosh/uml-viewer/master/scripts/get-uml-viewer -o get-uml-viewer
 #          chmod +x get-uml-viewer && ./get-uml-viewer
 set -euo pipefail
 
-repo_url="${UML_VIEWER_REPO_URL:-https://github.com/unclebob/uml-viewer.git}"
+repo_url="${UML_VIEWER_REPO_URL:-https://github.com/timotheosh/uml-viewer.git}"
 ref="${UML_VIEWER_REF:-master}"
 tool_dir=".uml-viewer/uml-viewer"
 quil_ver="4.3.1563"
@@ -104,19 +104,31 @@ launch_viewer() {
 }
 
 if [[ "\${1:-}" == "-h" || "\${1:-}" == "--help" ]]; then
-  echo "usage: ./uml [--restart]" >&2
+  echo "usage: ./uml [--agent opencode|grok] [--restart]" >&2
   echo "  (no args)   fresh window; companion writes the diagram" >&2
   echo "  --restart   new JVM, same companion; restores last view" >&2
   echo "  The viewer detaches; exceptions go to \$LOG." >&2
   exit 0
 fi
 
-if [[ "\${1:-}" == "--restart" ]]; then
-  edn="\$(edn_path)"
+if [[ " \$* " == *" --restart "* ]]; then
+  supplied_path=0
+  expect_agent=0
+  for arg in "\$@"; do
+    if [[ "\$expect_agent" -eq 1 ]]; then
+      expect_agent=0
+    elif [[ "\$arg" == "--agent" ]]; then
+      expect_agent=1
+    elif [[ "\$arg" != --* ]]; then
+      supplied_path=1
+    fi
+  done
+  edn=""
+  [[ "\$supplied_path" -eq 1 ]] || edn="\$(edn_path)"
   if [[ -n "\$edn" ]]; then
-    launch_viewer --restart "\$edn"
+    launch_viewer "\$@" "\$edn"
   else
-    launch_viewer --restart
+    launch_viewer "\$@"
   fi
   exit 0
 fi

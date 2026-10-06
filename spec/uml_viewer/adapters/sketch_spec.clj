@@ -605,7 +605,7 @@
                                (reset! opts (apply hash-map args))
                                :main-applet)
                     uml-viewer.adapters.sketch/open-in-terminal! (fn [& _])]
-        (should= :main-applet (sketch/start! "doc.edn" :source-impl))
+        (should= :main-applet (sketch/start! "doc.edn" :source-impl false :grok))
         (should= "UML viewer" (:title @opts))
         (should= [sketch/window-width sketch/window-height] (:size @opts))
         (should= [:resizable] (:features @opts))
@@ -751,11 +751,12 @@
           remembered (atom 0)]
       (with-redefs [q/sketch (fn [& _] :applet)
                     uml-viewer.adapters.sketch/open-in-terminal! (fn [& _] (swap! opened inc))
-                    uml-viewer.adapters.sketch/remember-companion! (fn [_] (swap! remembered inc))]
-        (should= :applet (sketch/start! "doc.edn" :src true))
+                    uml-viewer.adapters.sketch/remember-companion! (fn [_] (swap! remembered inc))
+                    mailbox/read-companion (fn [_] {:session "legacy"})]
+        (should= :applet (sketch/start! "doc.edn" :src true :grok))
         (should= 0 @opened)
         (should= 1 @remembered)
-        (sketch/start! "doc.edn" :src)
+        (sketch/start! "doc.edn" :src false :grok)
         (should= 1 @opened)
         (should= 1 @remembered))))
 
@@ -1070,3 +1071,14 @@
           (should= [false] @pinned)
           (should= 2 (count @shown)))))))
 
+
+(describe "OpenCode regen feedback"
+  (it "identifies a failed OpenCode companion while retaining the queued request"
+    (let [previous @sketch/!backend]
+      (try
+        (reset! sketch/!backend :opencode)
+        (with-redefs [sketch/request-regen! (fn [_] {:woke? false})
+                      uml-viewer.adapters.opencode/snapshot (fn [] {:status :failed})]
+          (should= "Regen queued; OpenCode companion failed."
+                   (:mail-status (call 'regen-press {:path "examples/library.edn"}))))
+        (finally (reset! sketch/!backend previous))))))

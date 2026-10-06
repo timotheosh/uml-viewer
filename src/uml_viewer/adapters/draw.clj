@@ -714,6 +714,19 @@
                       (name (:open-layer state))))]
       (q/text (str "← " label) 12 28))))
 
+(defn- draw-companion [state]
+  (when-let [companion (:companion state)]
+    (let [x (- (q/width) layout/sidebar-w) y (- (q/height) 174)]
+      (q/no-stroke)
+      (rgb [30 38 35])
+      (q/rect x y layout/sidebar-w 60)
+      (rgb gold)
+      (q/text-align :left :top)
+      (q/text-size 12)
+      (q/text (str "OpenCode: " (name (or (:status companion) :starting))) (+ x 16) (+ y 8))
+      (rgb muted)
+      (q/text "Click to review approvals / attach" (+ x 16) (+ y 30)))))
+
 (defn draw-state [state]
   (apply q/background bg)
   (when (:waiting state)
@@ -722,6 +735,7 @@
   (draw-world state)
   (q/pop-matrix)
   (draw-sidebar state)
+  (draw-companion state)
   (draw-diagram-banner state)
   (draw-nav-label state)
   (draw-edge-popup (:hover state) (:pointer state)))

@@ -11,14 +11,28 @@
        (filter #(re-find #"\.clj[cs]?$" (.getName %)))
        (sort-by #(.getPath %))))
 
+(declare require-specs aliases-of)
+
+(defn- reader-resolver [ns-form]
+  (let [namespace (second ns-form)
+        aliases (aliases-of (require-specs ns-form))]
+    (reify clojure.lang.LispReader$Resolver
+      (currentNS [_] namespace)
+      (resolveAlias [_ alias] (get aliases alias))
+      (resolveClass [_ _] nil)
+      (resolveVar [_ _] nil))))
+
 (defn- read-forms [file]
   (with-open [r (PushbackReader. (io/reader file))]
     (binding [*read-eval* false]
-      (loop [forms []]
-        (let [form (read {:eof ::eof :read-cond :allow :features #{:clj}} r)]
+      (loop [forms [] resolver nil]
+        (let [form (binding [*reader-resolver* resolver]
+                     (read {:eof ::eof :read-cond :allow :features #{:clj}} r))]
           (if (= form ::eof)
             forms
-            (recur (conj forms form))))))))
+            (recur (conj forms form)
+                   (if (and (seq? form) (= 'ns (first form)))
+                     (reader-resolver form) resolver))))))))
 
 (defn- ns-form [forms]
   (first (filter #(and (seq? %) (= 'ns (first %))) forms)))

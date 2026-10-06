@@ -116,3 +116,18 @@
       (should (contains? edges [:application.document :engine.compose :dependency]))
       (should (:foreign (by-id :quil.core)))
       (should (contains? edges [:adapters.draw :quil.core :dependency])))))
+
+(describe "Clojure namespace reader aliases"
+  (it "reads auto-resolved keywords and maps without evaluating the source"
+    (let [dir (io/file (System/getProperty "java.io.tmpdir") (str "uml-alias-" (System/nanoTime)))]
+      (spit-ns dir "demo/a.clj"
+        "(ns demo.a (:require [demo.b :as b] [demo.c :as-alias c]))
+         (def data [::b/item ::c/item ::local #::b{:item 1}])
+         (throw (Exception. \"must not evaluate\"))")
+      (spit-ns dir "demo/b.clj" "(ns demo.b)")
+      (spit-ns dir "demo/c.clj" "(ns demo.c)")
+      (let [g (graph/scan-project :clojure dir {:prefix "demo"})
+            edges (set (map (juxt :from :to :kind) (:edges g)))]
+        (should= #{:a :b :c} (set (map :id (:classes g))))
+        (should (contains? edges [:a :b :dependency]))
+        (should (contains? edges [:a :c :dependency]))))))

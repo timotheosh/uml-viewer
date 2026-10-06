@@ -45,7 +45,8 @@ policy, not the IR. See [Policy](#policy).
 
 ## Run
 
-Needs Clojure CLI and Java 21+.
+Needs Clojure CLI, Java 21+, and a separately configured OpenCode installation
+(or Grok when explicitly selected).
 
 From **this repo**:
 
@@ -54,6 +55,7 @@ clj -M:ir                            # policy → examples/uml-viewer.edn
 clj -M:run
 clj -M:run examples/library.edn
 clj -M:run examples/uml-viewer.edn
+clj -M:run --agent grok              # legacy companion
 clj -M:run --help
 ```
 
@@ -62,7 +64,7 @@ needed):
 
 ```bash
 cd /path/to/the-project
-curl -fsSL https://raw.githubusercontent.com/unclebob/uml-viewer/master/scripts/get-uml-viewer -o get-uml-viewer
+curl -fsSL https://raw.githubusercontent.com/timotheosh/uml-viewer/master/scripts/get-uml-viewer -o get-uml-viewer
 chmod +x get-uml-viewer
 ./get-uml-viewer               # fetch, write ./uml, start
 ./uml                          # later fresh starts (returns immediately)
@@ -73,22 +75,58 @@ chmod +x get-uml-viewer
 **gitignored** `.uml-viewer/uml-viewer/` (a nested `.git` there is invisible
 to the project's repo), writes `./uml`, and starts the viewer. `--install-only`
 skips the start. `UML_VIEWER_REPO_URL` and `UML_VIEWER_REF` override the clone
-source (default `master`).
+source (default `master`). While using the development branch, set
+`UML_VIEWER_REF=feat/opencode` before installing from this fork.
 
 `./uml` returns immediately (`clojure` in the background, not `clj`/`rlwrap`).
 The diagram is its own JVM. Exceptions and JVM output append to
 **`uml-viewer-log.txt`** in the project directory (gitignored). `clj -M:run`
 still holds the terminal; prefer `./uml`.
 
-A **tmux** session unique to the examined project starts interactive Grok in
-that directory (`--yolo --trust --rules …` plus a launch prompt). The name is
-`uml-viewer-<project>-<hash>`, stored in `.uml-viewer/companion.edn`. On start
-it writes a hierarchical policy from that project's namespaces and regenerates
-the IR. Type there; Esc is the real TUI interrupt. Closing the diagram kills
-**only that** tmux session and its Terminal window — other Grok agents stay
-up. If that Grok process dies, tmux respawns it in the same pane. That
-instance also runs `clj -M:crap`, `clj -M:mutate`, and IR generate after later
-changes. Project-wide rules live in `.grok/rules/uml-viewer.md`.
+OpenCode is the default companion. Install and configure OpenCode separately;
+`OPENCODE_BIN` selects an executable if it is not on PATH. The viewer starts
+one authenticated, loopback-only OpenCode server per examined project. It
+uses your configured model and provider credentials. Startup checks the
+server's published API and the companion's effective permissions; unsupported
+versions or missing provider setup appear in the companion panel.
+
+The OpenCode panel near the bottom of the inspector shows working, idle,
+approval needed, recovering, or failed. Click it to review requests in a
+scrollable dialog. **Approve once**, **Approve for session**, and **Reject**
+apply to the operation shown; session approval displays the exact patterns
+being granted. Requests answered in OpenCode's terminal become inactive.
+The dialog refreshes automatically as requests arrive or resolve.
+
+**Copy attach command** connects OpenCode's terminal to this conversation.
+**Copy authentication** copies only the server password. In your terminal,
+run `read -rs OPENCODE_SERVER_PASSWORD`, paste the copied password, press
+Enter, then run `export OPENCODE_SERVER_PASSWORD` and the attach command.
+This keeps the password out of shell history. Agent questions must be
+answered in that attached terminal; the viewer shows attention needed.
+
+The companion allows source reads, searches, and exact mailbox/diagram
+writes. Shell commands, policy/source edits, metric commands, and other
+effects require approval. It does not rewrite your OpenCode configuration.
+Runtime credentials live in owner-readable `.uml-viewer/opencode-auth.edn`;
+server credentials are excluded from companion records and viewer logs.
+
+Use this with **trusted or reviewed repositories**. Project configuration,
+plugins, MCP servers, and commands remain active. Tool approvals are not an
+OS sandbox and do not make an unfamiliar repository safe to execute.
+
+The viewer sends notifications through HTTP and preserves the existing EDN
+mailbox protocol. When the server fails it reconnects with capped backoff,
+resumes the recorded conversation, and checks submitted message identities
+before continuing. If a message is missing, interrupted, or finishes without
+handling its mail, it reports failure and preserves queued work. Inspect the
+attached conversation before explicitly starting a fresh viewer; effects are
+never blindly replayed. Closing the viewer stops only its owned server.
+
+Select the legacy companion with `./uml --agent grok` or
+`clj -M:run --agent grok`. Grok keeps its existing tmux/Terminal.app lifecycle,
+`--yolo --trust` flags, and notification timing. Its automatic approvals and
+macOS terminal launching are unchanged. OpenCode requires neither tmux nor
+automatic terminal launching and works on Linux and macOS.
 
 Prefer `./uml` in the examined project (from `get-uml-viewer`). Aliases
 `:uml-viewer` / `:uml-viewer-restart` still work if present.
@@ -99,13 +137,13 @@ Prefer `./uml` in the examined project (from `get-uml-viewer`). Aliases
 | `./uml --restart` | **associated agent only** | New JVM, same companion. Restores the last view. |
 
 Do **not** pass `--restart` unless you are that companion recycling the
-window after source changes. A stray `--restart` skips spawning Grok and
+window after source changes. A stray `--restart` skips creating a companion and
 leaves a diagram with no agent. The companion recycles the window by
 writing `:quit-for-restart` to `.uml-viewer/to-viewer.edn`, waiting for
 the JVM to exit, then `./uml --restart`. The new JVM restores depth, pan,
 zoom, and which proposal was showing (`.uml-viewer/session.edn`). Do not
-SIGKILL. Closing the window kills only that project's companion, not other
-Grok agents.
+SIGKILL. Closing the window stops only that project's companion. The recorded backend
+is preserved on restart; an explicit conflicting `--agent` is rejected.
 
 On a fresh start the canvas stays blank until the companion sends `:display`,
 with **Waiting for agent to create diagram.** `R` reloads the current EDN
@@ -292,7 +330,7 @@ tree's namespace root. `src/model.ts` becomes `bookwriter.model`
 | `:sources` | One scan per `{:lang :root :prefix?}`. The entry `:prefix` is that tree's namespace root |
 | `:foreign` | External libs as ovals. A listed prefix collapses `quil.core` to `quil`. Unlisted externals are dropped |
 
-**Viewer Grok loop** (passed with `--rules` to the companion session only)
+**Viewer companion loop** (dedicated OpenCode agent prompt; Grok `--rules`)
 
 On launch: from the examined directory, write or update the hierarchical
 policy and regenerate the IR, then wait.
@@ -392,7 +430,7 @@ and C/M dots; double-click still opens a component.
              :omit [cli]}]
 ```
 
-Companion Grok must not invent `:proposals` on launch and must keep them when
+The companion must not invent `:proposals` on launch and must keep them when
 updating `:order`. If instructed, add a named proposal and regenerate the IR.
 
 The viewer draws a violating arrow **red**, and **bold red** when a selected
@@ -400,13 +438,13 @@ element highlights it. Hand-written IR may set `:violating true` directly.
 
 ## Companion mailbox
 
-The viewer and the companion Grok talk through `.uml-viewer/` in the examined
-project (gitignored). The file is the mail; tmux is only a doorbell.
+The viewer and the companion talk through `.uml-viewer/` in the examined
+project (gitignored). The file is the mail; HTTP (OpenCode) or tmux (Grok) is only a doorbell.
 
 | File | Direction |
 |------|-----------|
-| `.uml-viewer/to-viewer.edn` | Grok → viewer |
-| `.uml-viewer/to-agent.edn` | viewer → Grok |
+| `.uml-viewer/to-viewer.edn` | Companion → viewer |
+| `.uml-viewer/to-agent.edn` | viewer → companion |
 
 Each mailbox file is a small queue `{:next-id n :queue [cmd …]}` (tmp-then-rename).
 Commands have a rising `:id`. Append; do not overwrite. Handling a command
@@ -416,14 +454,15 @@ does this itself on `to-viewer.edn`. The companion must pop each
 
 `.uml-viewer/session.edn` is the last view (depth, pan, zoom, proposal) written
 on `:quit-for-restart` and restored by `--restart`. `.uml-viewer/companion.edn`
-records this viewer's tmux session and Terminal window id so close/kill never
-touches another project's agent.
+records the backend and owned process/session identity (or Grok tmux session
+and Terminal window id). OpenCode credentials are kept separately. Legacy
+records without a backend are interpreted as Grok.
 
 | `:op` | Meaning |
 |-------|---------|
 | `:display` | Viewer loads `:path` (relative to the project root) |
-| `:regen` | Grok rewrites hierarchical policy, regenerates IR, then `:display` |
-| `:quit-for-restart` | Viewer exits the JVM without killing Grok. The associated agent then runs `clj -M:uml-viewer-restart`. |
+| `:regen` | The companion rewrites hierarchical policy, regenerates IR, then `:display` |
+| `:quit-for-restart` | Viewer exits the JVM without stopping the companion. The associated agent then runs `clj -M:uml-viewer-restart`. |
 | `:refresh-crap` | Run CRAP on `:target` (class or component), then IR |
 | `:refresh-mutate` | Differential mutate `:target`'s src files, then IR |
 | `:refresh-mutate-all` | `clj -M:mutate --mutate-all` on `:target`'s src files, then IR |
@@ -431,14 +470,15 @@ touches another project's agent.
 | `:context` | Inspector selection is the discussion context: `{:context :real}` or `{:context :proposal :proposal-id id :name "…"}` |
 
 Clicking **Real diagram** or a proposal (including **New Proposal**) writes
-`:context` and wakes Grok. Stay on that architecture until the next
+`:context` and wakes the companion. Stay on that architecture until the next
 `:context`.
 
 Right-click ops include `:target {:id :ns :kind :class|:component :proposal-id?}`.
 `:kind` is `:component` for a layer box (and its nested nses) and `:class`
 for a module.
 
-**Regen** in the inspector queues `:regen` and wakes Grok with literal text, a
+**Regen** queues `:regen`. OpenCode receives an HTTP message once it is idle;
+approvals and agent questions pause new notifications. Grok is woken with literal text, a
 150ms pause, `C-m`, 50ms, then `C-j` (same timing as SwarmForge). The wake-up
 does not contain the command. If Grok is busy, it finishes first, then reads
 the mailbox. If tmux is missing, the button still writes the file and the

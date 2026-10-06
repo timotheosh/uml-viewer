@@ -11,6 +11,9 @@
             [uml-viewer.engine.hit :as hit]
             [uml-viewer.engine.layout :as layout]
             [uml-viewer.domain.mailbox :as mailbox]
+            [uml-viewer.domain.companion :as companion]
+            [uml-viewer.adapters.opencode :as opencode]
+            [uml-viewer.adapters.companion-ui :as companion-ui]
             [uml-viewer.application.overlay :as overlay]
             [uml-viewer.adapters.source-window :as source-window]
             [uml-viewer.domain.policy :as policy])
@@ -116,6 +119,8 @@
                        candidates))
         "grok")))
 
+(defonce !backend (atom :grok))
+
 (defonce !session-name (atom nil))
 
 (defn session-id
@@ -203,7 +208,9 @@
   "Wake the companion Grok session. Returns false if tmux/session is missing."
   ([] (notify-agent! (System/getProperty "user.dir")))
   ([root]
-   (if-let [session (live-session root)]
+   (if (= :opencode @!backend)
+     (opencode/notify!)
+     (if-let [session (live-session root)]
      (do
        (reset! !session-name session)
        (doseq [step (notify-steps session)]
@@ -211,7 +218,7 @@
            (Thread/sleep (long (second step)))
            (apply tmux! step)))
        true)
-     false)))
+     false))))
 
 (defn request-agent!
   "Queue `op` for the companion and wake Grok. Returns {:cmd :woke?}."
@@ -346,7 +353,7 @@
            out (run-osascript script)
            win-id (re-find #"\d+" out)]
        (reset! !terminal-window-id win-id)
-       (mailbox/write-companion! cwd {:session session :window-id win-id})
+       (mailbox/write-companion! cwd {:backend :grok :session session :window-id win-id})
        {:script script :session session :window-id win-id}))))
 
 (defn shutdown-children!
@@ -398,7 +405,7 @@
 
 (defn- exit-app! []
   (when-not (:keep-agent @!bridge)
-    (shutdown-children!))
+    (if (= :opencode @!backend) (opencode/stop!) (shutdown-children!)))
   (halt-vm!))
 
 (defn- class-title [model]
@@ -602,7 +609,8 @@
     state))
 
 (defn update-state [state]
-  (let [state (-> state document/maybe-reload document/poll-mail)]
+  (let [state (cond-> (-> state document/maybe-reload document/poll-mail)
+                (= :opencode @!backend) (assoc :companion (opencode/snapshot)))]
     (if (:quit-for-restart state)
       (do (document/save-session! state)
           (quit-for-restart!)
@@ -750,9 +758,8 @@
 (defn- regen-press [state]
   (let [root (overlay/metrics-root (:path state))
         {:keys [woke?]} (request-regen! root)]
-    (assoc state :mail-status (if woke?
-                                "Regen requested."
-                                "Regen queued; Grok session not attached."))))
+    (assoc state :mail-status
+           (companion/regen-message @!backend woke? (:status (opencode/snapshot))))))
 
 (defn- proposal-menu-click? [event hit]
   (and (right-click? event) (= :proposal (:kind hit))))
@@ -812,6 +819,11 @@
         x (:x event)
         y (:y event)]
     (cond
+      (and (= :opencode @!backend)
+           (>= x (- w layout/sidebar-w))
+           (<= (- h 174) y (- h 114)))
+      (do (SwingUtilities/invokeLater companion-ui/review!) state)
+
       (events/regen-hit? x y w h)
       (regen-press state)
 
@@ -858,11 +870,25 @@
   ([path source-impl]
    (start! path source-impl false))
   ([path source-impl restart?]
+   (start! path source-impl restart? nil))
+  ([path source-impl restart? agent]
    (swap! !bridge assoc :source source-impl)
-   (let [root (overlay/metrics-root path)]
-     (if restart?
-       (remember-companion! root)
-       (open-in-terminal! root)))
+   (let [root (overlay/metrics-root path)
+         record (mailbox/read-companion root)
+         backend (companion/select-backend agent restart? record)]
+     (reset! !backend backend)
+     (case backend
+       :grok (do (when (and (not restart?) (= :opencode (:backend record)))
+                   (opencode/stop-process! record))
+                 (if restart? (remember-companion! root) (open-in-terminal! root)))
+       :opencode (do (when-not restart?
+                       (when record
+                         (if (= :opencode (:backend record))
+                           (opencode/stop-process! record)
+                           (kill-companion-session! (:session record)))))
+                     (opencode/start! root path
+                       (companion/opencode-instructions standing-rules)
+                       launch-prompt restart?))))
    (q/sketch
     :title "UML viewer"
     :size [window-width window-height]
